@@ -1,14 +1,57 @@
 workflows:
   dhanauto_android:
     name: Dhanauto Android APK
+
     environment:
       flutter: stable
+      groups:
+        - Dhanauto
+
     scripts:
       - name: Create Android platform files
         script: flutter create --platforms=android --org com.dhanauto .
+
+      - name: Add location permissions
+        script: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text()
+
+          permissions = '''
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+          '''
+
+          text = text.replace("<application", permissions + "\n    <application", 1)
+          manifest.write_text(text)
+          PY
+
+      - name: Add Firebase configuration
+        script: cp google-services.json android/app/google-services.json
+
+      - name: Add Google Maps API key
+        script: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text()
+          key = os.environ["MAPS_API_KEY"]
+
+          meta = '        <meta-data android:name="com.google.android.geo.API_KEY" android:value="' + key + '"/>'
+
+          text = text.replace("</application>", meta + "\n    </application>")
+          manifest.write_text(text)
+          PY
+
       - name: Get dependencies
         script: flutter pub get
+
       - name: Build release APK
-        script: flutter build apk --release
+        script: flutter build apk --release --dart-define=MAPS_API_KEY=$MAPS_API_KEY
+
     artifacts:
       - build/app/outputs/flutter-apk/app-release.apk
