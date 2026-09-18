@@ -11,6 +11,8 @@ const String mapsApiKey = String.fromEnvironment(
   defaultValue: '',
 );
 
+const LatLng defaultCenter = LatLng(28.7010, 80.5890);
+
 void main() {
   runApp(const DhanautoApp());
 }
@@ -24,7 +26,9 @@ class DhanautoApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Dhanauto',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.red,
+        ),
         useMaterial3: true,
       ),
       home: const BookingPage(),
@@ -42,30 +46,41 @@ class BookingPage extends StatefulWidget {
 class _BookingPageState extends State<BookingPage> {
   GoogleMapController? mapController;
 
-  final pickup = TextEditingController();
-  final destination = TextEditingController();
+  final pickupController = TextEditingController();
+  final destinationController = TextEditingController();
 
   Timer? searchTimer;
 
-  Position? currentPosition;
+  LatLng? pickupPosition;
   LatLng? destinationPosition;
 
   List<Map<String, dynamic>> suggestions = [];
 
-  static const LatLng defaultCenter = LatLng(27.7172, 85.3240);
+  bool searchingPickup = false;
 
   Set<Marker> get markers {
     final result = <Marker>{};
 
-    if (currentPosition != null) {
+    if (pickupPosition != null) {
       result.add(
         Marker(
           markerId: const MarkerId('pickup'),
-          position: LatLng(
-            currentPosition!.latitude,
-            currentPosition!.longitude,
+          position: pickupPosition!,
+          draggable: true,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueGreen,
           ),
-          infoWindow: const InfoWindow(title: 'Pickup location'),
+          infoWindow: const InfoWindow(
+            title: 'Pickup',
+          ),
+          onDragEnd: (newPosition) {
+            setState(() {
+              pickupPosition = newPosition;
+              pickupController.text =
+                  'Map location (${newPosition.latitude.toStringAsFixed(5)}, '
+                  '${newPosition.longitude.toStringAsFixed(5)})';
+            });
+          },
         ),
       );
     }
@@ -75,7 +90,21 @@ class _BookingPageState extends State<BookingPage> {
         Marker(
           markerId: const MarkerId('destination'),
           position: destinationPosition!,
-          infoWindow: const InfoWindow(title: 'Destination'),
+          draggable: true,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueRed,
+          ),
+          infoWindow: const InfoWindow(
+            title: 'Destination',
+          ),
+          onDragEnd: (newPosition) {
+            setState(() {
+              destinationPosition = newPosition;
+              destinationController.text =
+                  'Map location (${newPosition.latitude.toStringAsFixed(5)}, '
+                  '${newPosition.longitude.toStringAsFixed(5)})';
+            });
+          },
         ),
       );
     }
@@ -91,9 +120,10 @@ class _BookingPageState extends State<BookingPage> {
 
   Future<void> getCurrentLocation() async {
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-
-      if (!serviceEnabled) {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        showMessage(
+          'Phone ko Location/GPS ON गर्नुहोस्।',
+        );
         return;
       }
 
@@ -101,39 +131,73 @@ class _BookingPageState extends State<BookingPage> {
           await Geolocator.checkPermission();
 
       if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
+        permission =
+            await Geolocator.requestPermission();
       }
 
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
+        showMessage(
+          'Location permission दिनुहोस्।',
+        );
         return;
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+      final position =
+          await Geolocator.getCurrentPosition(
+        desiredAccuracy:
+            LocationAccuracy.high,
+      );
+
+      final point = LatLng(
+        position.latitude,
+        position.longitude,
       );
 
       if (!mounted) return;
 
       setState(() {
-        currentPosition = position;
-        pickup.text =
-            'Current location (${position.latitude.toStringAsFixed(5)}, '
-            '${position.longitude.toStringAsFixed(5)})';
+        pickupPosition = point;
+        pickupController.text =
+            'Current location';
       });
 
       mapController?.animateCamera(
         CameraUpdate.newLatLngZoom(
-          LatLng(position.latitude, position.longitude),
+          point,
           15,
         ),
       );
     } catch (e) {
-      debugPrint('Location error: $e');
+      debugPrint(
+        'Location error: $e',
+      );
     }
   }
 
-  void onDestinationChanged(String value) {
+  void startPickupMapSelection() {
+    setState(() {
+      searchingPickup = true;
+      suggestions = [];
+    });
+
+    showMessage(
+      'अब map मा tap गरेर Pickup छान्नुहोस्।',
+    );
+  }
+
+  void startDestinationMapSelection() {
+    setState(() {
+      searchingPickup = false;
+      suggestions = [];
+    });
+
+    showMessage(
+      'अब map मा tap गरेर Destination छान्नुहोस्।',
+    );
+  }
+
+  void onSearchChanged(String value) {
     searchTimer?.cancel();
 
     if (value.trim().length < 2) {
@@ -144,7 +208,7 @@ class _BookingPageState extends State<BookingPage> {
     }
 
     searchTimer = Timer(
-      const Duration(milliseconds: 500),
+      const Duration(milliseconds: 400),
       () {
         searchPlaces(value.trim());
       },
@@ -153,7 +217,9 @@ class _BookingPageState extends State<BookingPage> {
 
   Future<void> searchPlaces(String input) async {
     if (mapsApiKey.isEmpty) {
-      debugPrint('MAPS_API_KEY is missing');
+      debugPrint(
+        'MAPS_API_KEY missing',
+      );
       return;
     }
 
@@ -163,11 +229,14 @@ class _BookingPageState extends State<BookingPage> {
           'https://places.googleapis.com/v1/places:autocomplete',
         ),
         headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': mapsApiKey,
+          'Content-Type':
+              'application/json',
+          'X-Goog-Api-Key':
+              mapsApiKey,
           'X-Goog-FieldMask':
               'suggestions.placePrediction.placeId,'
-              'suggestions.placePrediction.text',
+              'suggestions.placePrediction.text,'
+              'suggestions.placePrediction.structuredFormat',
         },
         body: jsonEncode({
           'input': input,
@@ -177,26 +246,37 @@ class _BookingPageState extends State<BookingPage> {
 
       if (response.statusCode != 200) {
         debugPrint(
-          'Places error ${response.statusCode}: ${response.body}',
+          'Places error ${response.statusCode}: '
+          '${response.body}',
         );
         return;
       }
 
-      final data = jsonDecode(response.body);
+      final data =
+          jsonDecode(response.body);
 
-      final List<dynamic> rawSuggestions =
+      final raw =
           data['suggestions'] ?? [];
 
-      final results = <Map<String, dynamic>>[];
+      final results =
+          <Map<String, dynamic>>[];
 
-      for (final item in rawSuggestions) {
-        final prediction = item['placePrediction'];
+      for (final item in raw) {
+        final prediction =
+            item['placePrediction'];
 
         if (prediction != null) {
-          results.add({
-            'placeId': prediction['placeId'],
-            'text': prediction['text']?['text'] ?? '',
-          });
+          final text =
+              prediction['text']?['text'] ??
+                  '';
+
+          if (text.toString().isNotEmpty) {
+            results.add({
+              'placeId':
+                  prediction['placeId'],
+              'text': text,
+            });
+          }
         }
       }
 
@@ -206,26 +286,31 @@ class _BookingPageState extends State<BookingPage> {
         suggestions = results;
       });
     } catch (e) {
-      debugPrint('Search error: $e');
+      debugPrint(
+        'Search error: $e',
+      );
     }
   }
 
-  Future<void> selectPlace(Map<String, dynamic> place) async {
-    final placeId = place['placeId'];
+  Future<void> selectPlace(
+    Map<String, dynamic> place,
+  ) async {
+    final placeId =
+        place['placeId'];
 
-    if (placeId == null || mapsApiKey.isEmpty) {
+    if (placeId == null ||
+        mapsApiKey.isEmpty) {
       return;
     }
 
     try {
-      final url = Uri.parse(
-        'https://places.googleapis.com/v1/places/$placeId',
-      );
-
       final response = await http.get(
-        url,
+        Uri.parse(
+          'https://places.googleapis.com/v1/places/$placeId',
+        ),
         headers: {
-          'X-Goog-Api-Key': mapsApiKey,
+          'X-Goog-Api-Key':
+              mapsApiKey,
           'X-Goog-FieldMask':
               'location,displayName,formattedAddress',
         },
@@ -233,22 +318,31 @@ class _BookingPageState extends State<BookingPage> {
 
       if (response.statusCode != 200) {
         debugPrint(
-          'Place details error ${response.statusCode}: '
+          'Place details error: '
+          '${response.statusCode} '
           '${response.body}',
         );
         return;
       }
 
-      final data = jsonDecode(response.body);
+      final data =
+          jsonDecode(response.body);
 
-      final location = data['location'];
+      final location =
+          data['location'];
 
-      if (location == null) return;
+      if (location == null) {
+        return;
+      }
 
-      final lat = (location['latitude'] as num).toDouble();
-      final lng = (location['longitude'] as num).toDouble();
+      final point = LatLng(
+        (location['latitude'] as num)
+            .toDouble(),
+        (location['longitude'] as num)
+            .toDouble(),
+      );
 
-      final selectedText =
+      final name =
           data['displayName']?['text'] ??
           data['formattedAddress'] ??
           place['text'];
@@ -256,150 +350,337 @@ class _BookingPageState extends State<BookingPage> {
       if (!mounted) return;
 
       setState(() {
-        destination.text = selectedText;
-        destination.selection = TextSelection.fromPosition(
-          TextPosition(offset: destination.text.length),
-        );
+        if (searchingPickup) {
+          pickupPosition = point;
+          pickupController.text =
+              name.toString();
+        } else {
+          destinationPosition = point;
+          destinationController.text =
+              name.toString();
+        }
 
-        destinationPosition = LatLng(lat, lng);
         suggestions = [];
       });
 
       mapController?.animateCamera(
         CameraUpdate.newLatLngZoom(
-          LatLng(lat, lng),
+          point,
           15,
         ),
       );
     } catch (e) {
-      debugPrint('Place details error: $e');
+      debugPrint(
+        'Place details error: $e',
+      );
     }
   }
 
+  void onMapTap(LatLng point) {
+    setState(() {
+      if (searchingPickup) {
+        pickupPosition = point;
+
+        pickupController.text =
+            'Map location (${point.latitude.toStringAsFixed(5)}, '
+            '${point.longitude.toStringAsFixed(5)})';
+      } else {
+        destinationPosition = point;
+
+        destinationController.text =
+            'Map location (${point.latitude.toStringAsFixed(5)}, '
+            '${point.longitude.toStringAsFixed(5)})';
+      }
+
+      suggestions = [];
+    });
+
+    showMessage(
+      searchingPickup
+          ? 'Pickup location राखियो। Marker सार्न पनि मिल्छ।'
+          : 'Destination राखियो। Marker सार्न पनि मिल्छ।',
+    );
+  }
+
+  void clearPickup() {
+    setState(() {
+      pickupPosition = null;
+      pickupController.clear();
+    });
+  }
+
+  void clearDestination() {
+    setState(() {
+      destinationPosition = null;
+      destinationController.clear();
+      suggestions = [];
+    });
+  }
+
+  void showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
+  }
+
   void bookRide() {
-    if (pickup.text.trim().isEmpty ||
-        destination.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Pickup र destination भर्नुहोस्'),
-        ),
+    if (pickupPosition == null) {
+      showMessage(
+        'Pickup location छान्नुहोस्।',
+      );
+      return;
+    }
+
+    if (destinationPosition == null) {
+      showMessage(
+        'Destination छान्नुहोस्।',
       );
       return;
     }
 
     showModalBottomSheet(
       context: context,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Dhanauto भेटियो',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const ListTile(
-                leading: CircleAvatar(
-                  child: Icon(Icons.electric_rickshaw),
-                ),
-                title: Text('Dhanauto E-Rickshaw'),
-                subtitle: Text(
-                  'Driver खोजिँदैछ • ETA लगभग 3–5 min',
-                ),
-                trailing: Text(
-                  'Rs. 120',
+      builder: (_) {
+        return SafeArea(
+          child: Padding(
+            padding:
+                const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize:
+                  MainAxisSize.min,
+              children: [
+                const Text(
+                  'Dhanauto भेटियो',
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
+                    fontSize: 22,
+                    fontWeight:
+                        FontWeight.bold,
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () {
-                    Navigator.pop(context);
 
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Ride request पठाइयो!',
-                        ),
-                      ),
-                    );
-                  },
-                  child: const Text('Confirm Ride'),
+                const SizedBox(
+                  height: 12,
                 ),
-              ),
-            ],
+
+                const ListTile(
+                  leading:
+                      CircleAvatar(
+                    child: Icon(
+                      Icons
+                          .electric_rickshaw,
+                    ),
+                  ),
+                  title: Text(
+                    'Dhanauto E-Rickshaw',
+                  ),
+                  subtitle: Text(
+                    'Driver खोजिँदैछ',
+                  ),
+                  trailing: Text(
+                    'Rs. 120',
+                    style: TextStyle(
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
+
+                const SizedBox(
+                  height: 12,
+                ),
+
+                SizedBox(
+                  width:
+                      double.infinity,
+                  child:
+                      FilledButton(
+                    onPressed: () {
+                      Navigator.pop(
+                        context,
+                      );
+
+                      showMessage(
+                        'Ride request पठाइयो!',
+                      );
+                    },
+                    child: const Text(
+                      'Confirm Ride',
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
+        );
+      },
+    );
+  }
+
+  Widget buildSearchSuggestions() {
+    if (suggestions.isEmpty) {
+      return const SizedBox();
+    }
+
+    return Container(
+      constraints:
+          const BoxConstraints(
+        maxHeight: 240,
+      ),
+      margin:
+          const EdgeInsets.only(
+        top: 5,
+      ),
+      decoration:
+          BoxDecoration(
+        color: Colors.white,
+        borderRadius:
+            BorderRadius.circular(
+          10,
         ),
+        boxShadow: const [
+          BoxShadow(
+            blurRadius: 8,
+            color: Colors.black26,
+          ),
+        ],
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        itemCount:
+            suggestions.length,
+        separatorBuilder:
+            (_, __) =>
+                const Divider(
+          height: 1,
+        ),
+        itemBuilder:
+            (context, index) {
+          final place =
+              suggestions[index];
+
+          return ListTile(
+            leading:
+                const Icon(
+              Icons.location_on,
+              color: Colors.red,
+            ),
+            title: Text(
+              place['text'] ??
+                  '',
+            ),
+            onTap: () {
+              selectPlace(
+                place,
+              );
+            },
+          );
+        },
       ),
     );
   }
 
   @override
-  void dispose() {
-    searchTimer?.cancel();
-    pickup.dispose();
-    destination.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
           'Dhanauto',
           style: TextStyle(
-            fontWeight: FontWeight.bold,
+            fontWeight:
+                FontWeight.bold,
           ),
         ),
         actions: [
           IconButton(
-            onPressed: getCurrentLocation,
-            icon: const Icon(Icons.my_location),
-          ),
-          IconButton(
-            onPressed: () {},
-            icon: const Icon(
-              Icons.notifications_none,
+            onPressed:
+                getCurrentLocation,
+            icon:
+                const Icon(
+              Icons.my_location,
             ),
           ),
         ],
       ),
+
       body: Stack(
         children: [
           GoogleMap(
-            initialCameraPosition: const CameraPosition(
-              target: defaultCenter,
-              zoom: 13,
+            initialCameraPosition:
+                const CameraPosition(
+              target:
+                  defaultCenter,
+              zoom: 9,
             ),
-            myLocationEnabled: false,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            markers: markers,
-            onMapCreated: (controller) {
-              mapController = controller;
 
-              if (currentPosition != null) {
-                controller.animateCamera(
-                  CameraUpdate.newLatLngZoom(
-                    LatLng(
-                      currentPosition!.latitude,
-                      currentPosition!.longitude,
-                    ),
+            myLocationEnabled:
+                true,
+
+            myLocationButtonEnabled:
+                false,
+
+            zoomControlsEnabled:
+                false,
+
+            markers: markers,
+
+            onMapCreated:
+                (controller) {
+              mapController =
+                  controller;
+
+              if (pickupPosition !=
+                  null) {
+                controller
+                    .animateCamera(
+                  CameraUpdate
+                      .newLatLngZoom(
+                    pickupPosition!,
                     15,
                   ),
                 );
               }
             },
+
+            onTap:
+                onMapTap,
+          ),
+
+          Positioned(
+            top: 12,
+            left: 12,
+            right: 12,
+            child: Card(
+              child: Padding(
+                padding:
+                    const EdgeInsets
+                        .all(12),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons
+                          .info_outline,
+                    ),
+                    const SizedBox(
+                      width: 8,
+                    ),
+                    Expanded(
+                      child: Text(
+                        searchingPickup
+                            ? 'Pickup छान्न map मा tap गर्नुहोस्'
+                            : 'Destination छान्न map मा tap गर्नुहोस्',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
 
           Positioned(
@@ -409,107 +690,120 @@ class _BookingPageState extends State<BookingPage> {
             child: Card(
               elevation: 8,
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding:
+                    const EdgeInsets
+                        .all(16),
                 child: Column(
                   children: [
-                    TextField(
-                      controller: pickup,
-                      readOnly: true,
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(
-                          Icons.my_location,
-                        ),
-                        labelText: 'Pickup location',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    TextField(
-                      controller: destination,
-                      onChanged: onDestinationChanged,
-                      decoration: InputDecoration(
-                        prefixIcon: const Icon(
-                          Icons.location_on,
-                        ),
-                        labelText: 'Where to?',
-                        border: const OutlineInputBorder(),
-                        suffixIcon: destination.text.isNotEmpty
-                            ? IconButton(
-                                onPressed: () {
-                                  destination.clear();
-                                  setState(() {
-                                    suggestions = [];
-                                    destinationPosition = null;
-                                  });
-                                },
-                                icon: const Icon(Icons.clear),
-                              )
-                            : null,
-                      ),
-                    ),
-
-                    if (suggestions.isNotEmpty)
-                      Container(
-                        constraints: const BoxConstraints(
-                          maxHeight: 230,
-                        ),
-                        margin: const EdgeInsets.only(top: 5),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .surface,
-                          borderRadius:
-                              BorderRadius.circular(10),
-                          border: Border.all(
-                            color: Colors.grey.shade300,
+                    Row(
+                      children: [
+                        Expanded(
+                          child:
+                              TextField(
+                            controller:
+                                pickupController,
+                            readOnly: true,
+                            decoration:
+                                InputDecoration(
+                              prefixIcon:
+                                  const Icon(
+                                Icons
+                                    .my_location,
+                              ),
+                              labelText:
+                                  'Pickup location',
+                              border:
+                                  const OutlineInputBorder(),
+                              suffixIcon:
+                                  pickupController
+                                          .text
+                                          .isNotEmpty
+                                      ? IconButton(
+                                          onPressed:
+                                              clearPickup,
+                                          icon:
+                                              const Icon(
+                                            Icons.clear,
+                                          ),
+                                        )
+                                      : null,
+                            ),
                           ),
                         ),
-                        child: ListView.separated(
-                          shrinkWrap: true,
-                          itemCount: suggestions.length,
-                          separatorBuilder: (_, __) =>
-                              const Divider(height: 1),
-                          itemBuilder: (context, index) {
-                            final place =
-                                suggestions[index];
-
-                            return ListTile(
-                              leading: const Icon(
-                                Icons.location_on,
-                              ),
-                              title: Text(
-                                place['text'] ?? '',
-                              ),
-                              onTap: () {
-                                selectPlace(place);
-                              },
-                            );
-                          },
+                        IconButton(
+                          tooltip:
+                              'Choose pickup on map',
+                          onPressed:
+                              startPickupMapSelection,
+                          icon:
+                              const Icon(
+                            Icons.map,
+                          ),
                         ),
-                      ),
+                      ],
+                    ),
 
-                    const SizedBox(height: 12),
+                    const SizedBox(
+                      height: 10,
+                    ),
 
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: FilledButton.icon(
-                        onPressed: bookRide,
-                        icon: const Icon(Icons.search),
-                        label: const Text(
-                          'Find Dhanauto',
+                    TextField(
+                      controller:
+                          destinationController,
+                      onChanged:
+                          onSearchChanged,
+                      onTap: () {
+                        setState(() {
+                          searchingPickup =
+                              false;
+                        });
+                      },
+                      decoration:
+                          InputDecoration(
+                        prefixIcon:
+                            const Icon(
+                          Icons
+                              .location_on,
                         ),
+                        labelText:
+                            'Where to?',
+                        hintText:
+                            'Type location name',
+                        border:
+                            const OutlineInputBorder(),
+                        suffixIcon:
+                            destinationController
+                                    .text
+                                    .isNotEmpty
+                                ? IconButton(
+                                    onPressed:
+                                        clearDestination,
+                                    icon:
+                                        const Icon(
+                                      Icons.clear,
+                                    ),
+                                  )
+                                : null,
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+
+                    buildSearchSuggestions(),
+
+                    const SizedBox(
+                      height: 8,
+                    ),
+
+                    SizedBox(
+                      width:
+                          double.infinity,
+                      child:
+                          OutlinedButton
+                              .icon(
+                        onPressed:
+                            startDestinationMapSelection,
+                        icon:
+                            const Icon(
+                          Icons.map,
+                        ),
+                        label:
+              
