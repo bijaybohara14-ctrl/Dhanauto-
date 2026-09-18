@@ -11,6 +11,27 @@ workflows:
       - name: Create Android platform files
         script: flutter create --platforms=android --org com.dhanauto .
 
+      - name: Set Android compile SDK
+        script: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/build.gradle")
+          text = p.read_text()
+
+          text = text.replace(
+              "compileSdk flutter.compileSdkVersion",
+              "compileSdk 36"
+          )
+
+          text = text.replace(
+              "compileSdkVersion flutter.compileSdkVersion",
+              "compileSdkVersion 36"
+          )
+
+          p.write_text(text)
+          PY
+
       - name: Add location permissions
         script: |
           python3 - <<'PY'
@@ -24,7 +45,12 @@ workflows:
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
           '''
 
-          text = text.replace("<application", permissions + "\n    <application", 1)
+          text = text.replace(
+              "<application",
+              permissions + "\n    <application",
+              1
+          )
+
           manifest.write_text(text)
           PY
 
@@ -43,7 +69,11 @@ workflows:
 
           meta = '        <meta-data android:name="com.google.android.geo.API_KEY" android:value="' + key + '"/>'
 
-          text = text.replace("</application>", meta + "\n    </application>")
+          text = text.replace(
+              "</application>",
+              meta + "\n    </application>"
+          )
+
           manifest.write_text(text)
           PY
 
